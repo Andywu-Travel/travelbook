@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,viewport-fit=cover">
+  <meta name="theme-color" content="#082f49">
+  <title>電子旅遊手冊</title>
+  <link rel="stylesheet" href="../../assets/css/app.css">
+</head>
+<body class="reader-page">
+  <div id="app" class="app" aria-busy="true">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark small">長運</span><span id="company">長運旅行社</span></div>
+      <div class="book-heading"><h1 id="book-title">電子旅遊手冊</h1><span id="mode-label">載入中</span></div>
+      <button id="fullscreen" class="icon-button" type="button" title="全螢幕" aria-label="全螢幕">⛶</button>
+    </header>
+    <section id="viewer-shell" class="viewer-shell">
+      <div id="loading" class="loading-card" role="status"><span class="spinner"></span><strong id="loading-title">正在開啟旅遊手冊</strong><span id="loading-detail">讀取設定中…</span></div>
+      <div id="error" class="error-card" hidden><strong>無法開啟手冊</strong><p id="error-message"></p><button id="retry" type="button">重新載入</button></div>
+      <div id="zoom-stage" class="zoom-stage"><div id="book" class="book" aria-label="PDF 電子翻頁書"></div></div>
+    </section>
+    <nav class="toolbar" aria-label="電子書控制列">
+      <button id="prev" type="button" aria-label="上一頁">‹ <span>上一頁</span></button>
+      <div class="page-control"><label for="page-input">頁碼</label><input id="page-input" type="number" min="1" value="1" inputmode="numeric"><span>/ <b id="page-total">—</b></span></div>
+      <button id="next" type="button" aria-label="下一頁"><span>下一頁</span> ›</button>
+      <span class="separator" aria-hidden="true"></span>
+      <button id="zoom-out" class="compact" type="button" aria-label="縮小">−</button>
+      <output id="zoom-value" aria-live="polite">100%</output>
+      <button id="zoom-in" class="compact" type="button" aria-label="放大">＋</button>
+    </nav>
+    <footer class="reader-footer"><span id="footer-company">長運旅行社</span><span id="author">巫安迪製作</span></footer>
+  </div>
+  <noscript>此電子書需要啟用 JavaScript。</noscript>
+  <script src="../../vendor/pdfjs/pdf.min.js"></script>
+  <script src="../../vendor/pageflip/page-flip.browser.js"></script>
+  <script src="../../assets/js/app.js"></script>
+</body>
+</html>
