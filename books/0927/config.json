@@ -2,5 +2,7 @@
   "title": "0927 旭正會計師 黑部立山五日旅遊手冊",
   "company": "長運旅行社",
   "author": "巫安迪",
-  "pdf": "book.pdf"
+  "pdf": "book.pdf",
+  "pagePattern": "pages/page-{page}.jpg",
+  "pageCount": 32
 }
