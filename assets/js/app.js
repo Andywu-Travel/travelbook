@@ -42,6 +42,7 @@
     ui.zoomValue.value = Math.round(zoom * 100) + '%';
     ui.zoomOut.disabled = zoom <= 0.6;
     ui.zoomIn.disabled = zoom >= 2;
+    if (flipBook) requestNearby(flipBook.getCurrentPageIndex());
   }
   function pageUrls(pattern, count) {
     return Array.from({ length: count }, (_, index) => {
@@ -49,10 +50,14 @@
       return currentFolderUrl(pattern.replace('{page}', page));
     });
   }
-  function preparePages(urls) {
-    const loaded = new Set(), pending = new Map();
-    let queue = [], active = 0;
-    let visible = new Set();
+  function preparePages(urls, lightweightUrls) {
+    const loaded = new Map(), pending = new Map();
+    const compact = window.matchMedia('(max-width: 700px)');
+    let queue = [], visible = new Set();
+    const isValid = index => index >= 0 && index < urls.length;
+    const wantsOriginal = index => !lightweightUrls || !compact.matches ||
+      (visible.has(index) && zoom * (window.visualViewport?.scale || 1) > 1.05);
+    const isReady = index => loaded.has(index) && (!wantsOriginal(index) || loaded.get(index).original);
     pageNodes = urls.map((url, index) => {
       const node = document.createElement('div');
       node.style.cssText = 'background-color:#fffdf8;color:#102a3a;overflow:hidden';
@@ -60,55 +65,75 @@
       retry.type = 'button';
       retry.textContent = '第 ' + (index + 1) + ' 頁載入中…';
       retry.style.cssText = 'width:100%;height:100%;border:0;background:#fffdf8;color:#102a3a';
-      retry.addEventListener('click', () => requestNearby(index));
+      retry.addEventListener('click', () => requestNearby(flipBook ? flipBook.getCurrentPageIndex() : index));
       node.appendChild(retry);
       return node;
     });
     function load(index) {
-      if (loaded.has(index)) return Promise.resolve(pageNodes[index].firstChild);
+      if (isReady(index)) return Promise.resolve(loaded.get(index).image);
       if (pending.has(index)) return pending.get(index).promise;
-      const entry = {};
-      const task = new Promise((resolve, reject) => {
+      const entry = { original: wantsOriginal(index) };
+      entry.promise = new Promise((resolve, reject) => {
         const img = new Image();
         img.alt = '第 ' + (index + 1) + ' 頁';
         img.draggable = false;
         img.fetchPriority = visible.has(index) || !flipBook ? 'high' : 'low';
         img.style.cssText = 'display:block;width:100%;height:100%;object-fit:contain;background:#fffdf8';
-        img.onload = () => { pageNodes[index].replaceChildren(img); loaded.add(index); resolve(img); };
-        img.onerror = () => reject(new Error('第 ' + (index + 1) + ' 頁載入失敗'));
+        img.onload = () => {
+          pageNodes[index].replaceChildren(img);
+          loaded.set(index, { image: img, original: entry.original });
+          resolve(img);
+        };
+        img.onerror = () => {
+          // A missing/unsupported lightweight image must not block reading.
+          if (!entry.original) { entry.original = true; img.src = urls[index]; return; }
+          reject(new Error('第 ' + (index + 1) + ' 頁載入失敗'));
+        };
         entry.cancel = () => {
           img.onload = img.onerror = null;
-          img.src = '';
+          img.removeAttribute('src');
+          if (pending.get(index) === entry) pending.delete(index);
           resolve(null);
         };
-        img.src = urls[index];
-      }).finally(() => pending.delete(index));
-      entry.promise = task;
+        img.src = entry.original ? urls[index] : lightweightUrls[index];
+      }).finally(() => { if (pending.get(index) === entry) pending.delete(index); });
       pending.set(index, entry);
-      return task;
+      return entry.promise;
+    }
+    function showPageError(index) {
+      let retry = pageNodes[index].querySelector('button');
+      if (!retry) {
+        retry = document.createElement('button');
+        retry.type = 'button';
+        retry.style.cssText = 'position:absolute;bottom:8px;left:5%;width:90%;padding:10px;border:0;border-radius:6px;background:#082f49;color:white';
+        retry.addEventListener('click', () => requestNearby(flipBook.getCurrentPageIndex()));
+        pageNodes[index].appendChild(retry);
+      }
+      retry.textContent = loaded.has(index) ? '高清圖片未載入，點此重試' : '載入失敗，點此重試';
     }
     function drain() {
-      while (active < 2 && queue.length) {
+      while (pending.size < 2 && queue.length) {
         const index = queue.shift();
-        if (loaded.has(index) || pending.has(index)) continue;
-        active++;
-        load(index).catch(() => {
-          pageNodes[index].firstChild.textContent = '載入失敗，點此重試';
-        }).finally(() => { active--; drain(); });
+        if (isReady(index) || pending.has(index)) continue;
+        load(index).catch(() => showPageError(index)).finally(drain);
       }
     }
     requestNearby = (index) => {
-      // Cancel stale preloads so a jump never waits for a previous spread.
-      visible = new Set([index, index + 1]);
-      queue = [index, index + 1, index - 1, index + 2, index + 3, index + 4, index + 5, index - 2]
-        .filter(i => i >= 0 && i < urls.length && !loaded.has(i));
-      if ([...visible].some(i => i < urls.length && !loaded.has(i))) {
-        pending.forEach((entry, i) => { if (!visible.has(i)) entry.cancel(); });
-      }
+      const spread = flipBook && flipBook.getOrientation() === 'landscape' && index > 0
+        ? [index, index + 1] : [index];
+      visible = new Set(spread.filter(isValid));
+      queue = [...new Set([...visible, index + 1, index + 2, index - 1, index + 3])]
+        .filter(i => isValid(i) && !isReady(i));
+      const needsVisible = [...visible].some(i => !isReady(i));
+      pending.forEach((entry, i) => {
+        if ((!visible.has(i) && (needsVisible || !queue.includes(i))) ||
+            (wantsOriginal(i) && !entry.original)) entry.cancel();
+      });
       drain();
     };
     return load;
   }
+
   function createFlipbook(urls, firstPage, ratio) {
     const availableHeight = Math.max(360, ui.viewer.clientHeight - 24);
     const maxPageHeight = Math.min(availableHeight, 1040);
@@ -121,8 +146,13 @@
       autoSize: true, startPage: firstPage
     });
     flipBook.on('flip', (e) => { updateControls(e.data); requestNearby(e.data); });
-    flipBook.on('changeOrientation', (e) => { ui.mode.textContent = e.data === 'portrait' ? '單頁模式' : '雙頁模式'; });
-    flipBook.on('init', (e) => { ui.mode.textContent = e.data.mode === 'portrait' ? '單頁模式' : '雙頁模式'; updateControls(e.data.page); });
+    flipBook.on('changeOrientation', (e) => { ui.mode.textContent = e.data === 'portrait' ? '單頁模式' : '雙頁模式'; requestNearby(flipBook.getCurrentPageIndex()); });
+    flipBook.on('init', (e) => { ui.mode.textContent = e.data.mode === 'portrait' ? '單頁模式' : '雙頁模式'; updateControls(e.data.page);
+      if ($('cover-preview')) $('cover-preview').hidden = true;
+      ui.loading.hidden = true; ui.app.setAttribute('aria-busy', 'false');
+      ui.pageInput.disabled = false;
+      requestNearby(e.data.page);
+    });
     flipBook.loadFromHTML(pageNodes);
   }
   async function start() {
@@ -145,12 +175,12 @@
       setLoading('正在開啟第 1 頁…');
       const urls = pageUrls(pattern, count);
       const firstPage = requestedPage(count);
-      const load = preparePages(urls);
+      const lightweightUrls = config.mobilePagePattern ? pageUrls(config.mobilePagePattern, count) : null;
+      const load = preparePages(urls, lightweightUrls);
       const firstImage = await load(firstPage);
       const ratio = firstImage.naturalWidth / firstImage.naturalHeight;
       createFlipbook(urls, firstPage, ratio);
-      ui.loading.hidden = true; ui.app.setAttribute('aria-busy', 'false');
-      requestNearby(firstPage);
+      requestNearby(flipBook.getCurrentPageIndex());
     } catch (error) { console.error(error); showError(error); }
   }
   ui.prev.addEventListener('click', () => flipBook && flipBook.flipPrev('top'));
@@ -161,6 +191,8 @@
   ui.fullscreen.addEventListener('click', async () => { try { if (!document.fullscreenElement) await document.documentElement.requestFullscreen(); else await document.exitFullscreen(); } catch (_) {} });
   ui.retry.addEventListener('click', () => location.reload());
   document.addEventListener('keydown', (e) => { if (/input/i.test(e.target.tagName)) return; if (e.key === 'ArrowLeft') ui.prev.click(); if (e.key === 'ArrowRight') ui.next.click(); if (e.key === '+' || e.key === '=') ui.zoomIn.click(); if (e.key === '-') ui.zoomOut.click(); });
+  window.visualViewport?.addEventListener('resize', () => { if (flipBook) requestNearby(flipBook.getCurrentPageIndex()); });
+  window.addEventListener('resize', () => { if (flipBook) requestNearby(flipBook.getCurrentPageIndex()); });
   applyZoom(1); start();
 }());
 
