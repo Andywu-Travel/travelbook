@@ -12,6 +12,8 @@
   };
   let flipBook = null;
   let zoom = 1;
+  let pageNodes = [];
+  let requestNearby = () => {};
 
   function currentFolderUrl(file) { return new URL(file, window.location.href).href; }
   function safeText(value, fallback) { return typeof value === 'string' && value.trim() ? value.trim() : fallback; }
@@ -55,6 +57,53 @@
       image.src = url;
     });
   }
+  function preparePages(urls) {
+    const loaded = new Set(), pending = new Map();
+    let queue = [], active = 0;
+    pageNodes = urls.map((url, index) => {
+      const node = document.createElement('div');
+      node.style.cssText = 'background-color:#fffdf8;color:#102a3a;overflow:hidden';
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.textContent = '第 ' + (index + 1) + ' 頁載入中…';
+      retry.style.cssText = 'width:100%;height:100%;border:0;background:#fffdf8;color:#102a3a';
+      retry.addEventListener('click', () => requestNearby(index));
+      node.appendChild(retry);
+      return node;
+    });
+    function load(index) {
+      if (loaded.has(index)) return Promise.resolve();
+      if (pending.has(index)) return pending.get(index);
+      const task = new Promise((resolve, reject) => {
+        const img = new Image();
+        img.alt = '第 ' + (index + 1) + ' 頁';
+        img.draggable = false;
+        img.style.cssText = 'display:block;width:100%;height:100%;object-fit:contain;background:#fffdf8';
+        img.onload = () => { pageNodes[index].replaceChildren(img); loaded.add(index); resolve(); };
+        img.onerror = () => reject(new Error('第 ' + (index + 1) + ' 頁載入失敗'));
+        img.src = urls[index];
+      }).finally(() => pending.delete(index));
+      pending.set(index, task);
+      return task;
+    }
+    function drain() {
+      while (active < 2 && queue.length) {
+        const index = queue.shift();
+        if (loaded.has(index) || pending.has(index)) continue;
+        active++;
+        load(index).catch(() => {
+          pageNodes[index].firstChild.textContent = '載入失敗，點此重試';
+        }).finally(() => { active--; drain(); });
+      }
+    }
+    requestNearby = (index) => {
+      // Current spread first, then upcoming spreads; never download the entire book at once.
+      queue = [index, index + 1, index - 1, index + 2, index + 3, index + 4, index + 5, index - 2]
+        .filter(i => i >= 0 && i < urls.length && !loaded.has(i));
+      drain();
+    };
+    return load;
+  }
   function createFlipbook(urls, firstPage, ratio) {
     const availableHeight = Math.max(360, ui.viewer.clientHeight - 24);
     const maxPageHeight = Math.min(availableHeight, 1040);
@@ -66,10 +115,10 @@
       mobileScrollSupport: false, swipeDistance: 28, flippingTime: 650,
       autoSize: true, startPage: firstPage
     });
-    flipBook.on('flip', (e) => updateControls(e.data));
+    flipBook.on('flip', (e) => { updateControls(e.data); requestNearby(e.data); });
     flipBook.on('changeOrientation', (e) => { ui.mode.textContent = e.data === 'portrait' ? '單頁模式' : '雙頁模式'; });
     flipBook.on('init', (e) => { ui.mode.textContent = e.data.mode === 'portrait' ? '單頁模式' : '雙頁模式'; updateControls(e.data.page); });
-    flipBook.loadFromImages(urls);
+    flipBook.loadFromHTML(pageNodes);
   }
   async function start() {
     try {
@@ -90,9 +139,13 @@
       ui.total.textContent = String(count); ui.pageInput.max = String(count);
       setLoading('正在開啟第 1 頁…');
       const urls = pageUrls(pattern, count);
-      const ratio = await imageRatio(urls[0]);
-      createFlipbook(urls, requestedPage(count), ratio);
+      const firstPage = requestedPage(count);
+      const load = preparePages(urls);
+      const ratio = await imageRatio(urls[firstPage]);
+      await load(firstPage);
+      createFlipbook(urls, firstPage, ratio);
       ui.loading.hidden = true; ui.app.setAttribute('aria-busy', 'false');
+      requestNearby(firstPage);
     } catch (error) { console.error(error); showError(error); }
   }
   ui.prev.addEventListener('click', () => flipBook && flipBook.flipPrev('top'));
@@ -105,3 +158,4 @@
   document.addEventListener('keydown', (e) => { if (/input/i.test(e.target.tagName)) return; if (e.key === 'ArrowLeft') ui.prev.click(); if (e.key === 'ArrowRight') ui.next.click(); if (e.key === '+' || e.key === '=') ui.zoomIn.click(); if (e.key === '-') ui.zoomOut.click(); });
   applyZoom(1); start();
 }());
+
