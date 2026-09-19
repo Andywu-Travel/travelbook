@@ -49,17 +49,10 @@
       return currentFolderUrl(pattern.replace('{page}', page));
     });
   }
-  function imageRatio(url) {
-    return new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve(image.naturalWidth / image.naturalHeight);
-      image.onerror = () => reject(new Error('無法讀取手冊第一頁。'));
-      image.src = url;
-    });
-  }
   function preparePages(urls) {
     const loaded = new Set(), pending = new Map();
     let queue = [], active = 0;
+    let visible = new Set();
     pageNodes = urls.map((url, index) => {
       const node = document.createElement('div');
       node.style.cssText = 'background-color:#fffdf8;color:#102a3a;overflow:hidden';
@@ -72,18 +65,26 @@
       return node;
     });
     function load(index) {
-      if (loaded.has(index)) return Promise.resolve();
-      if (pending.has(index)) return pending.get(index);
+      if (loaded.has(index)) return Promise.resolve(pageNodes[index].firstChild);
+      if (pending.has(index)) return pending.get(index).promise;
+      const entry = {};
       const task = new Promise((resolve, reject) => {
         const img = new Image();
         img.alt = '第 ' + (index + 1) + ' 頁';
         img.draggable = false;
+        img.fetchPriority = visible.has(index) || !flipBook ? 'high' : 'low';
         img.style.cssText = 'display:block;width:100%;height:100%;object-fit:contain;background:#fffdf8';
-        img.onload = () => { pageNodes[index].replaceChildren(img); loaded.add(index); resolve(); };
+        img.onload = () => { pageNodes[index].replaceChildren(img); loaded.add(index); resolve(img); };
         img.onerror = () => reject(new Error('第 ' + (index + 1) + ' 頁載入失敗'));
+        entry.cancel = () => {
+          img.onload = img.onerror = null;
+          img.src = '';
+          resolve(null);
+        };
         img.src = urls[index];
       }).finally(() => pending.delete(index));
-      pending.set(index, task);
+      entry.promise = task;
+      pending.set(index, entry);
       return task;
     }
     function drain() {
@@ -97,9 +98,13 @@
       }
     }
     requestNearby = (index) => {
-      // Current spread first, then upcoming spreads; never download the entire book at once.
+      // Cancel stale preloads so a jump never waits for a previous spread.
+      visible = new Set([index, index + 1]);
       queue = [index, index + 1, index - 1, index + 2, index + 3, index + 4, index + 5, index - 2]
         .filter(i => i >= 0 && i < urls.length && !loaded.has(i));
+      if ([...visible].some(i => i < urls.length && !loaded.has(i))) {
+        pending.forEach((entry, i) => { if (!visible.has(i)) entry.cancel(); });
+      }
       drain();
     };
     return load;
@@ -141,8 +146,8 @@
       const urls = pageUrls(pattern, count);
       const firstPage = requestedPage(count);
       const load = preparePages(urls);
-      const ratio = await imageRatio(urls[firstPage]);
-      await load(firstPage);
+      const firstImage = await load(firstPage);
+      const ratio = firstImage.naturalWidth / firstImage.naturalHeight;
       createFlipbook(urls, firstPage, ratio);
       ui.loading.hidden = true; ui.app.setAttribute('aria-busy', 'false');
       requestNearby(firstPage);
